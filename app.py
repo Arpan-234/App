@@ -1,9 +1,6 @@
 import streamlit as st
 import pandas as pd
 import io
-import os
-from pathlib import Path
-import anthropic
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
@@ -30,21 +27,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize Claude client
-@st.cache_resource
-def get_claude_client():
-    api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        st.error("ANTHROPIC_API_KEY not found")
-        st.stop()
-    return anthropic.Anthropic(api_key=api_key)
-
-try:
-    client = get_claude_client()
-except:
-    st.error("Failed to initialize Claude client")
-    st.stop()
-
 # Sidebar
 st.sidebar.title("⚙️ Configuration")
 st.sidebar.markdown("---")
@@ -54,33 +36,7 @@ mode = st.sidebar.radio(
     ["📈 Excel Automation", "📊 PowerPoint Creation", "🔄 Excel → PowerPoint"]
 )
 
-api_model = st.sidebar.selectbox(
-    "AI Model:",
-    ["claude-3-5-sonnet-20241022", "claude-3-opus-20250219"]
-)
-
 # Helper functions
-def call_claude(prompt: str, system_prompt: str = None) -> str:
-    try:
-        message = client.messages.create(
-            model=api_model,
-            max_tokens=4096,
-            system=system_prompt or "You are a helpful assistant",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return message.content[0].text
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-def analyze_excel_with_ai(df: pd.DataFrame, task: str) -> dict:
-    df_summary = f"Rows: {df.shape[0]}, Cols: {df.shape[1]}\n{df.head().to_string()}"
-    prompt = f"Analyze this data for {task}:\n{df_summary}\nReturn JSON format."
-    response = call_claude(prompt)
-    try:
-        return json.loads(response)
-    except:
-        return {"result": response}
-
 def create_ppt_from_data(data_dict: dict, title: str, theme_color: tuple) -> Presentation:
     prs = Presentation()
     prs.slide_width = Inches(10)
@@ -133,85 +89,142 @@ def create_ppt_from_data(data_dict: dict, title: str, theme_color: tuple) -> Pre
 
 # Main UI
 st.markdown("<h1 class='main-title'>📊 AI Excel & PowerPoint Agent</h1>", unsafe_allow_html=True)
-st.markdown("Powered by Claude & Streamlit")
+st.markdown("Powered by Streamlit")
 st.markdown("---")
 
 if mode == "📈 Excel Automation":
-    st.header("Excel Automation")
-    uploaded_file = st.file_uploader("Upload Excel", type=["xlsx", "xls", "csv"])
-    task = st.selectbox("Task", ["clean", "analyze", "summarize", "visualize"])
+    st.header("📈 Excel Data Analysis")
+    uploaded_file = st.file_uploader("Upload Excel or CSV file", type=["xlsx", "xls", "csv"])
     
     if uploaded_file:
         try:
             df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.success(f"Loaded: {df.shape[0]} rows, {df.shape[1]} cols")
-            st.dataframe(df.head())
+            st.success(f"✅ Loaded: {df.shape[0]} rows, {df.shape[1]} columns")
             
-            if st.button("Analyze"):
-                with st.spinner("Analyzing..."):
-                    results = analyze_excel_with_ai(df, task)
-                st.json(results)
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-
-elif mode == "📊 PowerPoint Creation":
-    st.header("Create PowerPoint")
-    uploaded_file = st.file_uploader("Upload Excel for PPT", type=["xlsx", "xls", "csv"])
-    title = st.text_input("Title", "AI Report")
-    color = st.selectbox("Theme", ["Blue", "Green", "Red"])
-    colors = {"Blue": (31, 119, 180), "Green": (44, 160, 44), "Red": (214, 39, 40)}
-    
-    if uploaded_file and st.button("Generate PPT"):
-        try:
-            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            # Display preview
+            st.subheader("Data Preview")
+            st.dataframe(df.head(10), use_container_width=True)
             
-            ppt_content = {
-                "Overview": ["Generated presentation", "Data analysis"],
-                "Summary": {"Rows": df.shape[0], "Columns": df.shape[1]}
-            }
+            # Basic statistics
+            st.subheader("Data Statistics")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Rows", df.shape[0])
+            col2.metric("Total Columns", df.shape[1])
+            col3.metric("Memory Usage (KB)", f"{df.memory_usage(deep=True).sum() / 1024:.2f}")
             
-            prs = create_ppt_from_data(ppt_content, title, colors[color])
-            ppt_buffer = io.BytesIO()
-            prs.save(ppt_buffer)
-            ppt_buffer.seek(0)
+            # Data description
+            st.subheader("Data Description")
+            st.write(df.describe())
+            
+            # Download processed file
+            output_buffer = io.BytesIO()
+            with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Data', index=False)
+            output_buffer.seek(0)
             
             st.download_button(
-                "Download PPT",
-                ppt_buffer,
-                f"{title}.pptx",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                label="💾 Download Processed Excel",
+                data=output_buffer,
+                file_name=f"processed_{uploaded_file.name}",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-else:
-    st.header("Excel → PowerPoint Workflow")
-    uploaded_file = st.file_uploader("Upload Excel", type=["xlsx", "xls", "csv"])
-    title = st.text_input("Presentation Title", "AI Report")
+elif mode == "📊 PowerPoint Creation":
+    st.header("📊 Generate PowerPoint Presentation")
     
-    if uploaded_file and st.button("Create Full Workflow"):
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        uploaded_file = st.file_uploader("Upload Excel for PPT", type=["xlsx", "xls", "csv"])
+    with col2:
+        theme_color_name = st.selectbox("Theme Color", ["Blue", "Green", "Red", "Purple", "Orange"])
+    
+    colors = {"Blue": (31, 119, 180), "Green": (44, 160, 44), "Red": (214, 39, 40), "Purple": (148, 103, 189), "Orange": (255, 127, 14)}
+    ppt_title = st.text_input("Presentation Title", "Data Report")
+    
+    if uploaded_file and st.button("🎨 Generate PowerPoint"):
         try:
             df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.success(f"Processing: {df.shape[0]} rows")
+            st.info(f"Creating presentation from {df.shape[0]} rows of data...")
             
             ppt_content = {
-                "Data Summary": [f"Total Records: {df.shape[0]}", f"Fields: {df.shape[1]}"],
-                "Columns": list(df.columns)[:5]
+                "Data Overview": [
+                    f"Total Records: {df.shape[0]}",
+                    f"Total Fields: {df.shape[1]}",
+                    f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                ],
+                "Key Columns": list(df.columns[:6]),
+                "Data Summary": {
+                    "Rows": df.shape[0],
+                    "Columns": df.shape[1],
+                    "Data Types": len(df.dtypes.unique())
+                }
             }
             
-            prs = create_ppt_from_data(ppt_content, title, (31, 119, 180))
+            prs = create_ppt_from_data(ppt_content, ppt_title, colors[theme_color_name])
             ppt_buffer = io.BytesIO()
             prs.save(ppt_buffer)
             ppt_buffer.seek(0)
             
+            st.success("✅ PowerPoint generated successfully!")
             st.download_button(
-                "Download PPT",
-                ppt_buffer,
-                f"{title}.pptx",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                label="📥 Download PowerPoint",
+                data=ppt_buffer,
+                file_name=f"{ppt_title.replace(' ', '_')}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+
+else:  # End-to-End Workflow
+    st.header("🔄 Complete Excel to PowerPoint Workflow")
+    
+    uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls", "csv"])
+    ppt_title = st.text_input("Presentation Title", "Analysis Report")
+    
+    if uploaded_file and st.button("🚀 Create Complete Presentation"):
+        try:
+            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            st.success(f"✅ Processing {df.shape[0]} rows...")
+            
+            ppt_content = {
+                "Executive Summary": [
+                    f"Dataset: {uploaded_file.name}",
+                    f"Total Records: {df.shape[0]}",
+                    f"Total Fields: {df.shape[1]}"
+                ],
+                "Column Analysis": list(df.columns),
+                "Data Quality": {
+                    "Complete Records": len(df.dropna()),
+                    "Missing Values": df.isnull().sum().sum(),
+                    "Duplicate Rows": df.duplicated().sum()
+                },
+                "Insights": [
+                    "Data has been analyzed and loaded successfully",
+                    f"Processing completed at {datetime.now().strftime('%H:%M:%S')}",
+                    "Ready for presentation"
+                ]
+            }
+            
+            prs = create_ppt_from_data(ppt_content, ppt_title, (31, 119, 180))
+            ppt_buffer = io.BytesIO()
+            prs.save(ppt_buffer)
+            ppt_buffer.seek(0)
+            
+            st.success("✅ Complete presentation created!")
+            st.download_button(
+                label="📥 Download Presentation",
+                data=ppt_buffer,
+                file_name=f"{ppt_title.replace(' ', '_')}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
             )
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
 st.sidebar.markdown("---")
-st.sidebar.info("Built with Streamlit & Claude AI")
+st.sidebar.info("✨ **Features**:\n" +
+                "- Upload & analyze Excel/CSV files\n" +
+                "- Generate professional PowerPoint decks\n" +
+                "- Download processed files\n" +
+                "- All processing done locally")
